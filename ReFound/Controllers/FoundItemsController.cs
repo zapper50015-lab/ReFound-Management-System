@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using System.Text;
+using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Rendering;
 using Microsoft.EntityFrameworkCore;
@@ -13,16 +15,91 @@ namespace ReFound.Controllers
     public class FoundItemsController : Controller
     {
         private readonly ApplicationDbContext _context;
+        private readonly IConfiguration _configuration;
+        private readonly IHttpClientFactory _httpClientFactory;
 
-        public FoundItemsController(ApplicationDbContext context)
+        public FoundItemsController(
+            ApplicationDbContext context,
+            IConfiguration configuration,
+            IHttpClientFactory httpClientFactory)
         {
             _context = context;
+            _configuration = configuration;
+            _httpClientFactory = httpClientFactory;
         }
 
         // GET: FoundItems
         public async Task<IActionResult> Index()
         {
             return View(await _context.FoundItems.ToListAsync());
+        }
+
+        // SmartSEARCH API - Calls local fine-tuned Ollama model
+        [HttpGet("/FoundItems/SmartSearch")]
+        public async Task<IActionResult> SmartSearch(string query)
+        {
+            if (string.IsNullOrWhiteSpace(query))
+            {
+                return Json(await _context.FoundItems.Select(i => i.Id).ToListAsync());
+            }
+
+            var items = await _context.FoundItems
+                .Select(i => new { i.Id, i.ItemName, i.Category, i.Description, i.LocationFound })
+                .ToListAsync();
+
+            string endpoint = "http://localhost:11434/api/chat";
+
+            var systemPrompt = @"You are a search query matching assistant for a university Lost & Found system.
+Analyze the user's query and identify which item IDs from AVAILABLE ITEMS best match the intent, description, brand, color, category, or location.
+Return ONLY a JSON array of matching integer IDs (e.g., [1, 4]). Return [] if nothing matches. Do not invent IDs.";
+
+            var userPrompt = $@"USER QUERY: ""{query}""
+AVAILABLE ITEMS: {JsonSerializer.Serialize(items)}";
+
+            var requestPayload = new
+            {
+                model = "refound-model",
+                messages = new[]
+                {
+                    new { role = "system", content = systemPrompt },
+                    new { role = "user", content = userPrompt }
+                },
+                stream = false,
+                format = new
+                {
+                    type = "array",
+                    items = new { type = "integer" }
+                },
+                options = new
+                {
+                    temperature = 0
+                }
+            };
+
+            var client = _httpClientFactory.CreateClient();
+            var content = new StringContent(JsonSerializer.Serialize(requestPayload), Encoding.UTF8, "application/json");
+
+            var response = await client.PostAsync(endpoint, content);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                var errorDetails = await response.Content.ReadAsStringAsync();
+                Console.WriteLine($"Ollama API Error ({response.StatusCode}): {errorDetails}");
+                return StatusCode((int)response.StatusCode, errorDetails);
+            }
+
+            var jsonResponse = await response.Content.ReadAsStringAsync();
+            using var doc = JsonDocument.Parse(jsonResponse);
+
+            var rawResult = doc.RootElement
+                .GetProperty("message")
+                .GetProperty("content")
+                .GetString()?.Trim() ?? "[]";
+
+            rawResult = rawResult.Replace("```json", "").Replace("```", "").Trim();
+
+            var matchingIds = JsonSerializer.Deserialize<List<int>>(rawResult) ?? new List<int>();
+            return Json(matchingIds);
         }
 
         // GET: FoundItems/Details/5
@@ -50,8 +127,6 @@ namespace ReFound.Controllers
         }
 
         // POST: FoundItems/Create
-        // To protect from overposting attacks, enable the specific properties you want to bind to.
-        // For more details, see http://go.microsoft.com/fwlink/?LinkId=317598.
         [HttpPost]
         [ValidateAntiForgeryToken]
         public async Task<IActionResult> Create([Bind("Id,ItemName,Description,Category,DateFound,LocationFound,Status")] FoundItem foundItem)
@@ -82,8 +157,6 @@ namespace ReFound.Controllers
         }
 
         // POST: FoundItems/Edit/5
-        // To protect from overposting attacks, enable the specific properties you want to bind to.
-        // For more details, see http://go.microsoft.com/fwlink/?LinkId=317598.
         [HttpPost]
         [ValidateAntiForgeryToken]
         public async Task<IActionResult> Edit(int id, [Bind("Id,ItemName,Description,Category,DateFound,LocationFound,Status")] FoundItem foundItem)

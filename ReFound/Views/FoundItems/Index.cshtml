@@ -4,15 +4,17 @@
     ViewData["Title"] = "Index";
 }
 
-<h1>Index</h1>
+<h1>Found Items</h1>
 
 <p>
-    <a asp-action="Create">Create New</a>
+    <a asp-action="Create" class="btn btn-primary">Create New</a>
 </p>
 
-<!-- Live Search Input Box -->
-<input type="text" id="foundSearchBox" class="form-control mb-3"
-       placeholder="Live search found items..." />
+<!-- Live AI Search Input Box -->
+<div class="mb-3">
+    <input type="text" id="foundSearchBox" class="form-control"
+           placeholder="Live AI search (e.g., 'black hydroflask near gym', 'apple laptop charger')..." />
+</div>
 
 <table class="table">
     <thead>
@@ -40,7 +42,7 @@
     </thead>
     <tbody id="foundItemRows">
 @foreach (var item in Model) {
-        <tr>
+        <tr class="searchable-row" data-item-id="@item.Id">
             <td>
                 @Html.DisplayFor(modelItem => item.ItemName)
             </td>
@@ -71,18 +73,42 @@
 
 @section Scripts {
 <script>
-    document.getElementById("foundSearchBox").addEventListener("input", function () {
-        const text = this.value.toLowerCase();
+    let searchTimeout;
+    const searchInput = document.getElementById("foundSearchBox");
+    const rows = document.querySelectorAll("#foundItemRows tr");
 
-        document.querySelectorAll("#foundItemRows tr").forEach(function (row) {
-            // Checks ItemName (cell 0), Description (cell 1), Category (cell 2), and LocationFound (cell 4)
-            const rowText = (row.cells[0].textContent + " " +
-                             row.cells[1].textContent + " " +
-                             row.cells[2].textContent + " " +
-                             row.cells[4].textContent).toLowerCase();
+    searchInput.addEventListener("input", function () {
+        clearTimeout(searchTimeout);
+        const query = this.value.trim();
 
-            row.style.display = rowText.includes(text) ? "" : "none";
-        });
+        if (!query) {
+            rows.forEach(row => row.style.display = "");
+            return;
+        }
+
+        searchTimeout = setTimeout(async () => {
+            try {
+                console.log("1. Sending query:", query);
+                const res = await fetch(`/FoundItems/SmartSearch?query=${encodeURIComponent(query)}`);
+                console.log("2. Response status:", res.status);
+
+                if (!res.ok) {
+                    const errText = await res.text();
+                    console.error("Server error:", errText);
+                    return;
+                }
+
+                const matchingIds = await res.json();
+                console.log("3. Matching IDs:", matchingIds);
+
+                rows.forEach(row => {
+                    const id = parseInt(row.getAttribute("data-item-id"));
+                    row.style.display = matchingIds.includes(id) ? "" : "none";
+                });
+            } catch (err) {
+                console.error("Smart search failed:", err);
+            }
+        }, 500);
     });
 </script>
 }

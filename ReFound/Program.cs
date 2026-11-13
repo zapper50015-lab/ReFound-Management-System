@@ -10,6 +10,9 @@ builder.Services.AddDbContext<ApplicationDbContext>(options =>
     options.UseSqlite(builder.Configuration.GetConnectionString("DefaultConnection") 
         ?? "Data Source=ReFound.db"));
 
+// REGISTER HTTPCLIENT FOR GEMINI API CALLS HERE
+builder.Services.AddHttpClient();
+
 var app = builder.Build();
 
 if (!app.Environment.IsDevelopment())
